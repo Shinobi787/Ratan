@@ -1,147 +1,89 @@
 import streamlit as st
-import pandas as pd
-from pathlib import Path
-import json
-from datetime import datetime
 import plotly.express as px
+import pandas as pd
+from datetime import datetime
+import openai
 
-# Initialize session state variables
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-if 'user_data' not in st.session_state:
-    st.session_state.user_data = None
-if 'api_key_submitted' not in st.session_state:
-    st.session_state.api_key_submitted = False
+# Title and App Description
+st.title("Ratan - AI Financial Planner")
+st.write("Track your finances and get AI-powered recommendations.")
 
-def get_ai_recommendations(financial_data, api_key):
-    """Generate AI recommendations using OpenAI"""
-    try:
-        import openai
-        openai.api_key = api_key
+# Sidebar for Input Options
+st.sidebar.header("Input Your Financial Details")
 
-        # Updated prompt for INR
-        prompt = f"""
-        Based on the following financial data:
-        Monthly Income: ₹{financial_data['income']}
-        Monthly Expenses: ₹{sum(financial_data['expenses'].values())}
-        Current Savings Ratio: {financial_data['savings_ratio']:.1f}%
-        Savings Goal: ₹{financial_data['savings_goal']}
+# User Inputs
+salary = st.sidebar.number_input("Monthly Salary (in ₹)", min_value=0.0, step=1000.0)
+expenses = {}
+expense_categories = ["Rent", "Food", "Transport", "Utilities", "Other"]
 
-        Provide 3 specific financial recommendations to help reach the savings goal.
-        Consider:
-        1. Expense optimization
-        2. Savings strategies
-        3. Investment suggestions
-        Be specific and practical.
-        """
+for category in expense_categories:
+    expenses[category] = st.sidebar.number_input(f"{category} Expense (in ₹)", min_value=0.0, step=500.0)
 
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"Error generating AI recommendations: {str(e)}"
+total_expenses = sum(expenses.values())
+savings = salary - total_expenses
+savings_ratio = (savings / salary * 100) if salary > 0 else 0
 
-def authenticate(email, password):
-    """Basic authentication"""
-    if email == "demo@example.com" and password == "password":
-        st.session_state.authenticated = True
-        return True
-    return False
+st.sidebar.subheader("Set Your Financial Goals")
+financial_goal = st.sidebar.text_input("Your Goal (e.g., Buy a Car, Save for House)")
+goal_amount = st.sidebar.number_input("Goal Amount (in ₹)", min_value=0.0, step=5000.0)
+goal_age = st.sidebar.number_input("Target Age to Achieve Goal", min_value=18, step=1)
+current_age = st.sidebar.number_input("Your Current Age", min_value=18, step=1)
 
-def render_login():
-    """Render login form"""
-    st.title("Welcome to Ratan - AI Financial Planner")
+time_left = max(goal_age - current_age, 0)
+monthly_savings_needed = (goal_amount / (time_left * 12)) if time_left > 0 else 0
 
-    with st.form("login_form"):
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Login")
+if st.sidebar.button("Save Details"):
+    st.session_state.financial_data = {
+        "salary": salary,
+        "expenses": expenses,
+        "savings": savings,
+        "savings_ratio": savings_ratio,
+        "financial_goal": financial_goal,
+        "goal_amount": goal_amount,
+        "goal_age": goal_age,
+        "current_age": current_age,
+        "monthly_savings_needed": monthly_savings_needed
+    }
+    st.sidebar.success("Financial details saved!")
 
-        if submit:
-            if authenticate(email, password):
-                st.success("Login successful!")
-            else:
-                st.error("Invalid email or password")
+# Display Financial Summary
+if "financial_data" in st.session_state:
+    st.subheader("Financial Summary")
+    data = st.session_state.financial_data
+    st.write(f"**Salary:** ₹{data['salary']:.2f}")
+    st.write(f"**Total Expenses:** ₹{total_expenses:.2f}")
+    st.write(f"**Savings:** ₹{data['savings']:.2f} ({data['savings_ratio']:.1f}%)")
+    st.write(f"**Goal:** {data['financial_goal']} (₹{data['goal_amount']:.2f}) by age {data['goal_age']}")
+    st.write(f"**Monthly Savings Needed:** ₹{data['monthly_savings_needed']:.2f}")
 
-def render_dashboard():
-    """Render financial dashboard"""
-    st.title("Financial Dashboard")
-
-    if st.session_state.user_data:
-        user_data = st.session_state.user_data
-
-        # Convert income and expenses to INR
-        income_inr = user_data['income'] * 82  # Assuming 1 USD = 82 INR
-        expenses_inr = {k: v * 82 for k, v in user_data['expenses'].items()}
-        savings_goal_inr = user_data['savings_goal'] * 82
-
-        # Pie chart
-        labels = list(expenses_inr.keys()) + ["Savings"]
-        values = list(expenses_inr.values()) + [income_inr - sum(expenses_inr.values())]
-
-        try:
-            fig = px.pie(
-                names=labels,
-                values=values,
-                title="Expense Distribution (INR)",
-                hole=0.4
-            )
-            st.plotly_chart(fig)
-        except Exception as e:
-            st.error(f"Error rendering pie chart: {str(e)}")
-
-        # Display recommendations
-        if st.session_state.api_key_submitted:
-            api_key = st.text_input("Enter OpenAI API Key", type="password")
-            if api_key:
-                recommendations = get_ai_recommendations(user_data, api_key)
-                st.subheader("AI Recommendations")
-                st.write(recommendations)
-        else:
-            st.warning("Submit your API key to see recommendations.")
+    # Visualization
+    st.subheader("Expense Distribution")
+    df = pd.DataFrame(list(data['expenses'].items()), columns=["Category", "Amount"])
+    if not df.empty:
+        fig = px.pie(df, values="Amount", names="Category", title="Expenses Breakdown (₹)")
+        st.plotly_chart(fig)
     else:
-        st.warning("No user data available. Please log in and enter your details.")
+        st.write("No expenses recorded yet.")
 
-def render_user_input():
-    """Capture user input for financial data"""
-    st.title("Enter Your Financial Details")
+    # AI Financial Recommendations
+    st.subheader("🤖 AI Financial Recommendations")
+    api_key = st.text_input("Enter OpenAI API Key", type="password")
+    if st.button("Get AI Insights") and api_key:
+        openai.api_key = api_key
+        prompt = f"""
+        I earn ₹{data['salary']} per month and my expenses are ₹{total_expenses}. 
+        My savings are ₹{data['savings']} ({data['savings_ratio']:.1f}%). 
+        My goal is to save ₹{data['goal_amount']} for {data['financial_goal']} by age {data['goal_age']}. 
+        Suggest practical ways to optimize expenses and achieve my goal."""
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            st.write(response.choices[0].message.content)
+        except Exception as e:
+            st.error(f"Error generating AI recommendations: {str(e)}")
 
-    with st.form("user_input_form"):
-        income = st.number_input("Monthly Income (INR)", min_value=0)
-        expenses = {}
-        for category in ["Rent", "Food", "Transport", "Others"]:
-            expenses[category] = st.number_input(f"{category} Expenses (INR)", min_value=0)
-        savings_goal = st.number_input("Savings Goal (INR)", min_value=0)
-        submit = st.form_submit_button("Submit")
-
-        if submit:
-            st.session_state.user_data = {
-                "income": income,
-                "expenses": expenses,
-                "savings_ratio": ((income - sum(expenses.values())) / income) * 100 if income > 0 else 0,
-                "savings_goal": savings_goal
-            }
-            st.success("Financial data saved!")
-
-def main():
-    """Main application entry point"""
-    st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Login", "Dashboard", "User Input"])
-
-    if page == "Login":
-        render_login()
-    elif page == "Dashboard":
-        if st.session_state.authenticated:
-            render_dashboard()
-        else:
-            st.warning("Please log in to access the dashboard.")
-    elif page == "User Input":
-        if st.session_state.authenticated:
-            render_user_input()
-        else:
-            st.warning("Please log in to enter your financial details.")
-
-if __name__ == "__main__":
-    main()
+# Footer
+st.write("---")
+st.write("Made with ❤️ using Streamlit")
