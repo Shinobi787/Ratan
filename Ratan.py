@@ -2,9 +2,18 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import openai
 import plotly.express as px
+import yaml
 from pathlib import Path
 import json
+
+# Config and Security
+def load_config():
+    """Load configuration from config.yaml"""
+    with open('config.yaml') as file:
+        config = yaml.safe_load(file)
+    return config
 
 # Initialize session state
 if 'authenticated' not in st.session_state:
@@ -12,54 +21,68 @@ if 'authenticated' not in st.session_state:
 if 'user_data' not in st.session_state:
     st.session_state.user_data = None
 
+# Authentication
 def authenticate(email, password):
-    """Basic authentication"""
+    """Basic authentication - replace with Firebase in production"""
+    # Demo credentials - replace with actual authentication
     if email == "demo@example.com" and password == "password":
         st.session_state.authenticated = True
         return True
     return False
 
-def generate_financial_advice(financial_data):
-    """Generate financial advice based on basic financial rules"""
-    income = financial_data['income']
-    expenses = financial_data['expenses']
-    monthly_savings = financial_data['monthly_savings']
-    savings_ratio = financial_data['savings_ratio']
-    savings_goal = financial_data['savings_goal']
-    
-    advice = []
-    
-    # Basic 50/30/20 rule check
-    total_expenses = sum(expenses.values())
-    needs_ratio = sum(v for k, v in expenses.items() if k in ['Housing', 'Food', 'Utilities']) / income * 100
-    wants_ratio = sum(v for k, v in expenses.items() if k not in ['Housing', 'Food', 'Utilities']) / income * 100
+# Financial Data Processing
+def process_financial_data(income, expenses, savings_goal):
+    """Process user financial data and return recommendations"""
+    monthly_savings = income - sum(expenses.values())
     savings_ratio = (monthly_savings / income) * 100
     
-    # Generate personalized advice
-    if needs_ratio > 50:
-        advice.append("🏠 Your essential expenses (housing, food, utilities) are above 50% of income. "
-                     "Consider finding ways to reduce these costs or increase income.")
+    data = {
+        'income': income,
+        'expenses': expenses,
+        'monthly_savings': monthly_savings,
+        'savings_ratio': savings_ratio,
+        'savings_goal': savings_goal
+    }
     
-    if wants_ratio > 30:
-        advice.append("🎯 Your discretionary spending is above 30% of income. "
-                     "Try tracking these expenses more closely to find potential savings.")
+    return data
+
+def get_ai_recommendations(financial_data):
+    """Generate AI recommendations using OpenAI"""
+    prompt = f"""
+    Based on the following financial data:
+    Monthly Income: ${financial_data['income']}
+    Monthly Expenses: ${sum(financial_data['expenses'].values())}
+    Current Savings Ratio: {financial_data['savings_ratio']:.1f}%
+    Savings Goal: ${financial_data['savings_goal']}
+
+    Provide 3 specific financial recommendations to help reach the savings goal.
+    """
     
-    if savings_ratio < 20:
-        advice.append("💰 Your savings rate is below the recommended 20%. "
-                     f"Try to increase monthly savings by ${(0.2 * income) - monthly_savings:.2f} to reach this goal.")
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return "Unable to generate AI recommendations at the moment."
+
+# UI Components
+def render_login():
+    """Render login form"""
+    st.title("Welcome to Ratan - Your AI Financial Planner")
     
-    # Housing cost check
-    if expenses.get('Housing', 0) > 0.3 * income:
-        advice.append("🏘️ Your housing costs exceed 30% of your income. "
-                     "This might strain your budget - consider ways to reduce housing costs.")
-    
-    # Emergency fund check
-    months_to_emergency_fund = (income * 6 - savings_goal) / monthly_savings if monthly_savings > 0 else float('inf')
-    if months_to_emergency_fund > 0:
-        advice.append(f"🏦 At current savings rate, it will take {months_to_emergency_fund:.1f} months "
-                     "to build a 6-month emergency fund.")
-    
-    return "\n\n".join(advice)
+    with st.form("login_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Login")
+        
+        if submit:
+            if authenticate(email, password):
+                st.success("Login successful!")
+                st.rerun()
+            else:
+                st.error("Invalid credentials")
 
 def render_financial_input():
     """Render financial data input form"""
@@ -74,7 +97,7 @@ def render_financial_input():
         food = st.number_input("Food ($)", min_value=0.0, step=50.0)
         utilities = st.number_input("Utilities ($)", min_value=0.0, step=50.0)
         
-        savings_goal = st.number_input("Annual Savings Goal ($)", min_value=0.0, step=1000.0)
+        savings_goal = st.number_input("Savings Goal ($)", min_value=0.0, step=1000.0)
         
         submit = st.form_submit_button("Generate Financial Plan")
         
@@ -86,18 +109,12 @@ def render_financial_input():
                 'Utilities': utilities
             }
             
-            monthly_savings = monthly_income - sum(expenses.values())
-            savings_ratio = (monthly_savings / monthly_income * 100) if monthly_income > 0 else 0
-            
-            financial_data = {
-                'income': monthly_income,
-                'expenses': expenses,
-                'monthly_savings': monthly_savings,
-                'savings_ratio': savings_ratio,
-                'savings_goal': savings_goal
-            }
-            
+            financial_data = process_financial_data(monthly_income, expenses, savings_goal)
             st.session_state.user_data = financial_data
+            
+            # Store data (replace with proper database in production)
+            save_user_data(financial_data)
+            
             st.success("Financial plan generated!")
             st.rerun()
 
@@ -121,37 +138,57 @@ def render_dashboard():
             columns=['Category', 'Amount']
         )
         
-        col1, col2 = st.columns(2)
+        fig = px.pie(
+            expenses_df,
+            values='Amount',
+            names='Category',
+            title='Expenses Breakdown'
+        )
+        st.plotly_chart(fig)
         
-        with col1:
-            fig = px.pie(
-                expenses_df,
-                values='Amount',
-                names='Category',
-                title='Expenses Breakdown'
-            )
-            st.plotly_chart(fig)
-        
-        with col2:
-            fig2 = px.bar(
-                expenses_df,
-                x='Category',
-                y='Amount',
-                title='Monthly Spending by Category'
-            )
-            st.plotly_chart(fig2)
-        
-        # Financial Advice
-        st.subheader("📊 Financial Analysis & Recommendations")
-        advice = generate_financial_advice(st.session_state.user_data)
-        st.write(advice)
+        # AI Recommendations
+        st.subheader("AI-Powered Recommendations")
+        recommendations = get_ai_recommendations(st.session_state.user_data)
+        st.write(recommendations)
 
+# Data Storage
+def save_user_data(data):
+    """Save user data to JSON file (replace with database in production)"""
+    Path("data").mkdir(exist_ok=True)
+    with open('data/user_data.json', 'w') as f:
+        json.dump(data, f)
+
+def load_user_data():
+    """Load user data from JSON file"""
+    try:
+        with open('data/user_data.json', 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+
+# Main App
 def main():
+    # Load configuration
+    config = load_config()
+    
+    # Set OpenAI API key
+    openai.api_key = config['openai_api_key']
+    
+    # Authentication check
+    if not st.session_state.authenticated:
+        render_login()
+        return
+    
     # Sidebar navigation
     page = st.sidebar.selectbox(
         "Navigation",
         ["Financial Goals", "Dashboard"]
     )
+    
+    # Logout button
+    if st.sidebar.button("Logout"):
+        st.session_state.authenticated = False
+        st.rerun()
     
     # Page routing
     if page == "Financial Goals":
