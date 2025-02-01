@@ -1,76 +1,57 @@
-# app.py
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-import openai
 import plotly.express as px
-import yaml
 from pathlib import Path
 import json
+from datetime import datetime
 
-# Config and Security
-def load_config():
-    """Load configuration from config.yaml"""
-    with open('config.yaml') as file:
-        config = yaml.safe_load(file)
-    return config
-
-# Initialize session state
+# Initialize session state variables
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 if 'user_data' not in st.session_state:
     st.session_state.user_data = None
+if 'api_key_submitted' not in st.session_state:
+    st.session_state.api_key_submitted = False
 
-# Authentication
-def authenticate(email, password):
-    """Basic authentication - replace with Firebase in production"""
-    # Demo credentials - replace with actual authentication
-    if email == "demo@example.com" and password == "password":
-        st.session_state.authenticated = True
-        return True
-    return False
-
-# Financial Data Processing
-def process_financial_data(income, expenses, savings_goal):
-    """Process user financial data and return recommendations"""
-    monthly_savings = income - sum(expenses.values())
-    savings_ratio = (monthly_savings / income) * 100
-    
-    data = {
-        'income': income,
-        'expenses': expenses,
-        'monthly_savings': monthly_savings,
-        'savings_ratio': savings_ratio,
-        'savings_goal': savings_goal
-    }
-    
-    return data
-
-def get_ai_recommendations(financial_data):
+def get_ai_recommendations(financial_data, api_key):
     """Generate AI recommendations using OpenAI"""
-    prompt = f"""
-    Based on the following financial data:
-    Monthly Income: ${financial_data['income']}
-    Monthly Expenses: ${sum(financial_data['expenses'].values())}
-    Current Savings Ratio: {financial_data['savings_ratio']:.1f}%
-    Savings Goal: ${financial_data['savings_goal']}
-
-    Provide 3 specific financial recommendations to help reach the savings goal.
-    """
-    
     try:
+        import openai
+        openai.api_key = api_key
+        
+        prompt = f"""
+        Based on the following financial data:
+        Monthly Income: ${financial_data['income']}
+        Monthly Expenses: ${sum(financial_data['expenses'].values())}
+        Current Savings Ratio: {financial_data['savings_ratio']:.1f}%
+        Savings Goal: ${financial_data['savings_goal']}
+        
+        Provide 3 specific financial recommendations to help reach the savings goal.
+        Consider:
+        1. Expense optimization
+        2. Savings strategies
+        3. Investment suggestions
+        Be specific and practical.
+        """
+        
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content
     except Exception as e:
-        return "Unable to generate AI recommendations at the moment."
+        return f"Error generating AI recommendations: {str(e)}"
 
-# UI Components
+def authenticate(email, password):
+    """Basic authentication"""
+    if email == "demo@example.com" and password == "password":
+        st.session_state.authenticated = True
+        return True
+    return False
+
 def render_login():
     """Render login form"""
-    st.title("Welcome to Ratan - Your AI Financial Planner")
+    st.title("Welcome to Ratan - AI Financial Planner")
     
     with st.form("login_form"):
         email = st.text_input("Email")
@@ -83,11 +64,27 @@ def render_login():
                 st.rerun()
             else:
                 st.error("Invalid credentials")
+                
+    st.markdown("Use demo@example.com / password to login")
 
 def render_financial_input():
     """Render financial data input form"""
     st.title("Set Your Financial Goals")
     
+    # API Key Input Section
+    if not st.session_state.api_key_submitted:
+        st.info("🔑 To get AI-powered recommendations, please enter your OpenAI API key.")
+        with st.form("api_key_form"):
+            api_key = st.text_input("OpenAI API Key", type="password")
+            submit_key = st.form_submit_button("Submit API Key")
+            
+            if submit_key and api_key:
+                st.session_state.api_key = api_key
+                st.session_state.api_key_submitted = True
+                st.success("API Key saved! You can now get AI recommendations.")
+                st.rerun()
+    
+    # Financial Data Input Form
     with st.form("financial_form"):
         monthly_income = st.number_input("Monthly Income ($)", min_value=0.0, step=100.0)
         
@@ -97,7 +94,7 @@ def render_financial_input():
         food = st.number_input("Food ($)", min_value=0.0, step=50.0)
         utilities = st.number_input("Utilities ($)", min_value=0.0, step=50.0)
         
-        savings_goal = st.number_input("Savings Goal ($)", min_value=0.0, step=1000.0)
+        savings_goal = st.number_input("Annual Savings Goal ($)", min_value=0.0, step=1000.0)
         
         submit = st.form_submit_button("Generate Financial Plan")
         
@@ -109,12 +106,18 @@ def render_financial_input():
                 'Utilities': utilities
             }
             
-            financial_data = process_financial_data(monthly_income, expenses, savings_goal)
+            monthly_savings = monthly_income - sum(expenses.values())
+            savings_ratio = (monthly_savings / monthly_income * 100) if monthly_income > 0 else 0
+            
+            financial_data = {
+                'income': monthly_income,
+                'expenses': expenses,
+                'monthly_savings': monthly_savings,
+                'savings_ratio': savings_ratio,
+                'savings_goal': savings_goal
+            }
+            
             st.session_state.user_data = financial_data
-            
-            # Store data (replace with proper database in production)
-            save_user_data(financial_data)
-            
             st.success("Financial plan generated!")
             st.rerun()
 
@@ -138,42 +141,35 @@ def render_dashboard():
             columns=['Category', 'Amount']
         )
         
-        fig = px.pie(
-            expenses_df,
-            values='Amount',
-            names='Category',
-            title='Expenses Breakdown'
-        )
-        st.plotly_chart(fig)
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig = px.pie(
+                expenses_df,
+                values='Amount',
+                names='Category',
+                title='Expenses Breakdown'
+            )
+            st.plotly_chart(fig)
+        
+        with col2:
+            fig2 = px.bar(
+                expenses_df,
+                x='Category',
+                y='Amount',
+                title='Monthly Spending by Category'
+            )
+            st.plotly_chart(fig2)
         
         # AI Recommendations
-        st.subheader("AI-Powered Recommendations")
-        recommendations = get_ai_recommendations(st.session_state.user_data)
-        st.write(recommendations)
+        st.subheader("🤖 AI-Powered Financial Recommendations")
+        if hasattr(st.session_state, 'api_key') and st.session_state.api_key_submitted:
+            recommendations = get_ai_recommendations(st.session_state.user_data, st.session_state.api_key)
+            st.write(recommendations)
+        else:
+            st.warning("Please submit your OpenAI API key in the Financial Goals section to get AI-powered recommendations.")
 
-# Data Storage
-def save_user_data(data):
-    """Save user data to JSON file (replace with database in production)"""
-    Path("data").mkdir(exist_ok=True)
-    with open('data/user_data.json', 'w') as f:
-        json.dump(data, f)
-
-def load_user_data():
-    """Load user data from JSON file"""
-    try:
-        with open('data/user_data.json', 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return None
-
-# Main App
 def main():
-    # Load configuration
-    config = load_config()
-    
-    # Set OpenAI API key
-    openai.api_key = config['openai_api_key']
-    
     # Authentication check
     if not st.session_state.authenticated:
         render_login()
@@ -185,9 +181,18 @@ def main():
         ["Financial Goals", "Dashboard"]
     )
     
+    # API Key Status in Sidebar
+    if hasattr(st.session_state, 'api_key_submitted') and st.session_state.api_key_submitted:
+        st.sidebar.success("AI Features: Enabled ✅")
+    else:
+        st.sidebar.warning("AI Features: Disabled ❌")
+    
     # Logout button
     if st.sidebar.button("Logout"):
         st.session_state.authenticated = False
+        st.session_state.api_key_submitted = False
+        if hasattr(st.session_state, 'api_key'):
+            del st.session_state.api_key
         st.rerun()
     
     # Page routing
